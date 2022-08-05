@@ -2,6 +2,8 @@ import { Logger } from './Logger';
 import { EnhancedEventEmitter } from './EnhancedEventEmitter';
 import { SctpStreamParameters } from './SctpParameters';
 
+const logger = new Logger('DataConsumer');
+
 export type DataConsumerOptions =
 {
 	id?: string;
@@ -9,12 +11,26 @@ export type DataConsumerOptions =
 	sctpStreamParameters: SctpStreamParameters;
 	label?: string;
 	protocol?: string;
-	appData?: any;
+	appData?: Record<string, unknown>;
 }
 
-const logger = new Logger('DataConsumer');
+export type DataConsumerEvents =
+{
+	transportclose: [];
+	open: [];
+	error: [Error];
+	close: [];
+	message: [any];
+	// Private events.
+	'@close': [];
+}
 
-export class DataConsumer extends EnhancedEventEmitter
+export type DataConsumerObserverEvents =
+{
+	close: [];
+}
+
+export class DataConsumer extends EnhancedEventEmitter<DataConsumerEvents>
 {
 	// Id.
 	private readonly _id: string;
@@ -27,18 +43,10 @@ export class DataConsumer extends EnhancedEventEmitter
 	// SCTP stream parameters.
 	private readonly _sctpStreamParameters: SctpStreamParameters;
 	// App custom data.
-	private readonly _appData: any;
+	private readonly _appData: Record<string, unknown>;
 	// Observer instance.
-	protected readonly _observer = new EnhancedEventEmitter();
+	protected readonly _observer = new EnhancedEventEmitter<DataConsumerObserverEvents>();
 
-	/**
-	 * @emits transportclose
-	 * @emits open
-	 * @emits error - (error: Error)
-	 * @emits close
-	 * @emits message - (message: any)
-	 * @emits @close
-	 */
 	constructor(
 		{
 			id,
@@ -52,7 +60,7 @@ export class DataConsumer extends EnhancedEventEmitter
 			dataProducerId: string;
 			dataChannel: RTCDataChannel;
 			sctpStreamParameters: SctpStreamParameters;
-			appData: any;
+			appData?: Record<string, unknown>;
 		}
 	)
 	{
@@ -64,7 +72,7 @@ export class DataConsumer extends EnhancedEventEmitter
 		this._dataProducerId = dataProducerId;
 		this._dataChannel = dataChannel;
 		this._sctpStreamParameters = sctpStreamParameters;
-		this._appData = appData;
+		this._appData = appData || {};
 
 		this._handleDataChannel();
 	}
@@ -144,7 +152,7 @@ export class DataConsumer extends EnhancedEventEmitter
 	/**
 	 * App custom data.
 	 */
-	get appData(): any
+	get appData(): Record<string, unknown>
 	{
 		return this._appData;
 	}
@@ -152,16 +160,12 @@ export class DataConsumer extends EnhancedEventEmitter
 	/**
 	 * Invalid setter.
 	 */
-	set appData(appData: any) // eslint-disable-line @typescript-eslint/no-unused-vars
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	set appData(appData: Record<string, unknown>)
 	{
 		throw new Error('cannot override appData object');
 	}
 
-	/**
-	 * Observer.
-	 *
-	 * @emits close
-	 */
 	get observer(): EnhancedEventEmitter
 	{
 		return this._observer;

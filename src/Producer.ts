@@ -8,6 +8,8 @@ import {
 	RtpEncodingParameters
 } from './RtpParameters';
 
+const logger = new Logger('Producer');
+
 export type ProducerOptions =
 {
 	track?: MediaStreamTrack;
@@ -17,7 +19,7 @@ export type ProducerOptions =
 	stopTracks?: boolean;
 	disableTrackOnPause?: boolean;
 	zeroRtpOnPause?: boolean;
-	appData?: any;
+	appData?: Record<string, unknown>;
 }
 
 // https://mediasoup.org/documentation/v3/mediasoup-client/api/#ProducerCodecOptions
@@ -34,9 +36,50 @@ export type ProducerCodecOptions =
 	videoGoogleMinBitrate?: number;
 }
 
-const logger = new Logger('Producer');
+export type ProducerEvents =
+{
+	transportclose: [];
+	trackended: [];
+	// Private events.
+	'@pause': [
+		() => void,
+		(error: Error) => void
+	];
+	'@resume': [
+		() => void,
+		(error: Error) => void
+	];
+	'@replacetrack':
+	[
+		MediaStreamTrack | null,
+		() => void,
+		(error: Error) => void
+	];
+	'@setmaxspatiallayer':
+	[
+		number,
+		() => void,
+		(error: Error) => void
+	];
+	'@setrtpencodingparameters':
+	[
+		RTCRtpEncodingParameters,
+		() => void,
+		(error: Error) => void
+	];
+	'@getstats': [(stats: RTCStatsReport) => void, (error: Error) => void];
+	'@close': [];
+}
 
-export class Producer extends EnhancedEventEmitter
+export type ProducerObserverEvents =
+{
+	close: [];
+	pause: [];
+	resume: [];
+	trackended: [];
+}
+
+export class Producer extends EnhancedEventEmitter<ProducerEvents>
 {
 	// Id.
 	private readonly _id: string;
@@ -63,19 +106,10 @@ export class Producer extends EnhancedEventEmitter
 	// Whether we should replace the RTCRtpSender.track with null when paused.
 	private _zeroRtpOnPause: boolean;
 	// App custom data.
-	private readonly _appData: any;
+	private readonly _appData: Record<string, unknown>;
 	// Observer instance.
-	protected readonly _observer = new EnhancedEventEmitter();
+	protected readonly _observer = new EnhancedEventEmitter<ProducerObserverEvents>();
 
-	/**
-	 * @emits transportclose
-	 * @emits trackended
-	 * @emits @replacetrack - (track: MediaStreamTrack | null)
-	 * @emits @setmaxspatiallayer - (spatialLayer: string)
-	 * @emits @setrtpencodingparameters - (params: any)
-	 * @emits @getstats
-	 * @emits @close
-	 */
 	constructor(
 		{
 			id,
@@ -97,7 +131,7 @@ export class Producer extends EnhancedEventEmitter
 			stopTracks: boolean;
 			disableTrackOnPause: boolean;
 			zeroRtpOnPause: boolean;
-			appData: any;
+			appData?: Record<string, unknown>;
 		}
 	)
 	{
@@ -116,7 +150,7 @@ export class Producer extends EnhancedEventEmitter
 		this._stopTracks = stopTracks;
 		this._disableTrackOnPause = disableTrackOnPause;
 		this._zeroRtpOnPause = zeroRtpOnPause;
-		this._appData = appData;
+		this._appData = appData || {};
 		this._onTrackEnded = this._onTrackEnded.bind(this);
 
 		// NOTE: Minor issue. If zeroRtpOnPause is true, we cannot emit the
@@ -202,7 +236,7 @@ export class Producer extends EnhancedEventEmitter
 	/**
 	 * App custom data.
 	 */
-	get appData(): any
+	get appData(): Record<string, unknown>
 	{
 		return this._appData;
 	}
@@ -210,19 +244,12 @@ export class Producer extends EnhancedEventEmitter
 	/**
 	 * Invalid setter.
 	 */
-	set appData(appData) // eslint-disable-line @typescript-eslint/no-unused-vars
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	set appData(appData: Record<string, unknown>)
 	{
 		throw new Error('cannot override appData object');
 	}
 
-	/**
-	 * Observer.
-	 *
-	 * @emits close
-	 * @emits pause
-	 * @emits resume
-	 * @emits trackended
-	 */
 	get observer(): EnhancedEventEmitter
 	{
 		return this._observer;
@@ -276,7 +303,14 @@ export class Producer extends EnhancedEventEmitter
 		if (this._closed)
 			throw new InvalidStateError('closed');
 
-		return this.safeEmitAsPromise('@getstats');
+		return new Promise<RTCStatsReport>((resolve, reject) =>
+		{
+			this.safeEmit(
+				'@getstats',
+				resolve,
+				reject
+			);
+		});
 	}
 
 	/**
@@ -302,8 +336,14 @@ export class Producer extends EnhancedEventEmitter
 
 		if (this._zeroRtpOnPause)
 		{
-			this.safeEmitAsPromise('@replacetrack', null)
-				.catch(() => {});
+			new Promise<void>((resolve, reject) =>
+			{
+				this.safeEmit(
+					'@pause',
+					resolve,
+					reject
+				);
+			}).catch(() => {});
 		}
 
 		// Emit observer event.
@@ -333,8 +373,14 @@ export class Producer extends EnhancedEventEmitter
 
 		if (this._zeroRtpOnPause)
 		{
-			this.safeEmitAsPromise('@replacetrack', this._track)
-				.catch(() => {});
+			new Promise<void>((resolve, reject) =>
+			{
+				this.safeEmit(
+					'@resume',
+					resolve,
+					reject
+				);
+			}).catch(() => {});
 		}
 
 		// Emit observer event.
@@ -375,7 +421,15 @@ export class Producer extends EnhancedEventEmitter
 
 		if (!this._zeroRtpOnPause || !this._paused)
 		{
-			await this.safeEmitAsPromise('@replacetrack', track);
+			await new Promise<void>((resolve, reject) =>
+			{
+				this.safeEmit(
+					'@replacetrack',
+					track,
+					resolve,
+					reject
+				);
+			});
 		}
 
 		// Destroy the previous track.
@@ -413,14 +467,19 @@ export class Producer extends EnhancedEventEmitter
 		if (spatialLayer === this._maxSpatialLayer)
 			return;
 
-		await this.safeEmitAsPromise('@setmaxspatiallayer', spatialLayer);
+		await new Promise<void>((resolve, reject) =>
+		{
+			this.safeEmit(
+				'@setmaxspatiallayer',
+				spatialLayer,
+				resolve,
+				reject
+			);
+		}).catch(() => {});
 
 		this._maxSpatialLayer = spatialLayer;
 	}
 
-	/**
-	 * Sets the DSCP value.
-	 */
 	async setRtpEncodingParameters(
 		params: RTCRtpEncodingParameters
 	): Promise<void>
@@ -430,7 +489,15 @@ export class Producer extends EnhancedEventEmitter
 		else if (typeof params !== 'object')
 			throw new TypeError('invalid params');
 
-		await this.safeEmitAsPromise('@setrtpencodingparameters', params);
+		await new Promise<void>((resolve, reject) =>
+		{
+			this.safeEmit(
+				'@setrtpencodingparameters',
+				params,
+				resolve,
+				reject
+			);
+		});
 	}
 
 	private _onTrackEnded(): void

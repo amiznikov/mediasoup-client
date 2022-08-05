@@ -3,18 +3,37 @@ import { EnhancedEventEmitter } from './EnhancedEventEmitter';
 import { InvalidStateError } from './errors';
 import { MediaKind, RtpParameters } from './RtpParameters';
 
+const logger = new Logger('Consumer');
+
 export type ConsumerOptions =
 {
 	id?: string;
 	producerId?: string;
 	kind?: 'audio' | 'video';
 	rtpParameters: RtpParameters;
-	appData?: any;
+	appData?: Record<string, unknown>;
 }
 
-const logger = new Logger('Consumer');
+export type ConsumerEvents =
+{
+	transportclose: [];
+	trackended: [];
+	// Private events.
+	'@getstats': [(stats: RTCStatsReport) => void, (error: Error) => void];
+	'@close': [];
+	'@pause': [];
+	'@resume': [];
+}
 
-export class Consumer extends EnhancedEventEmitter
+export type ConsumerObserverEvents =
+{
+	close: [];
+	pause: [];
+	resume: [];
+	trackended: [];
+}
+
+export class Consumer extends EnhancedEventEmitter<ConsumerEvents>
 {
 	// Id.
 	private readonly _id: string;
@@ -33,18 +52,10 @@ export class Consumer extends EnhancedEventEmitter
 	// Paused flag.
 	private _paused: boolean;
 	// App custom data.
-	private readonly _appData: any;
+	private readonly _appData: Record<string, unknown>;
 	// Observer instance.
-	protected readonly _observer = new EnhancedEventEmitter();
+	protected readonly _observer = new EnhancedEventEmitter<ConsumerObserverEvents>();
 
-	/**
-	 * @emits transportclose
-	 * @emits trackended
-	 * @emits @getstats
-	 * @emits @close
-	 * @emits @pause
-	 * @emits @resume
-	 */
 	constructor(
 		{
 			id,
@@ -62,7 +73,7 @@ export class Consumer extends EnhancedEventEmitter
 			rtpReceiver?: RTCRtpReceiver;
 			track: MediaStreamTrack;
 			rtpParameters: RtpParameters;
-			appData: any;
+			appData?: Record<string, unknown>;
 		}
 	)
 	{
@@ -77,7 +88,7 @@ export class Consumer extends EnhancedEventEmitter
 		this._track = track;
 		this._rtpParameters = rtpParameters;
 		this._paused = !track.enabled;
-		this._appData = appData;
+		this._appData = appData || {};
 		this._onTrackEnded = this._onTrackEnded.bind(this);
 
 		this._handleTrack();
@@ -158,7 +169,7 @@ export class Consumer extends EnhancedEventEmitter
 	/**
 	 * App custom data.
 	 */
-	get appData(): any
+	get appData(): Record<string, unknown>
 	{
 		return this._appData;
 	}
@@ -166,19 +177,12 @@ export class Consumer extends EnhancedEventEmitter
 	/**
 	 * Invalid setter.
 	 */
-	set appData(appData) // eslint-disable-line no-unused-vars
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	set appData(appData: Record<string, unknown>)
 	{
 		throw new Error('cannot override appData object');
 	}
 
-	/**
-	 * Observer.
-	 *
-	 * @emits close
-	 * @emits pause
-	 * @emits resume
-	 * @emits trackended
-	 */
 	get observer(): EnhancedEventEmitter
 	{
 		return this._observer;
@@ -232,7 +236,14 @@ export class Consumer extends EnhancedEventEmitter
 		if (this._closed)
 			throw new InvalidStateError('closed');
 
-		return this.safeEmitAsPromise('@getstats');
+		return new Promise<RTCStatsReport>((resolve, reject) =>
+		{
+			this.safeEmit(
+				'@getstats',
+				resolve,
+				reject
+			);
+		});
 	}
 
 	/**
@@ -245,6 +256,13 @@ export class Consumer extends EnhancedEventEmitter
 		if (this._closed)
 		{
 			logger.error('pause() | Consumer closed');
+
+			return;
+		}
+
+		if (this._paused)
+		{
+			logger.debug('pause() | Consumer is already paused');
 
 			return;
 		}
@@ -268,6 +286,13 @@ export class Consumer extends EnhancedEventEmitter
 		if (this._closed)
 		{
 			logger.error('resume() | Consumer closed');
+
+			return;
+		}
+
+		if (!this._paused)
+		{
+			logger.debug('resume() | Consumer is already resumed');
 
 			return;
 		}
